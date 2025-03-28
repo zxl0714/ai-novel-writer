@@ -1,0 +1,4 @@
+pyautogen>=0.2.18
+python-dotenv>=1.0.0
+openai>=1.0.0 # 如果使用 OpenAI
+dashscope>=1.16 # 如果使用 Dashscope
