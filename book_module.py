@@ -106,10 +106,10 @@ class BookGenerator:
 {context if context else "这是第一章，没有先前内容。"}
 
 【角色档案参考】(节选或全部)
-{self.character_profiles[:1500]}...
+{self.character_profiles[:15000]}...
 
 【世界设定参考】(节选或全部)
-{self.world_details[:1500]}...
+{self.world_details[:15000]}...
 
 【本章大纲要求】
 {chapter_prompt}
@@ -119,7 +119,7 @@ class BookGenerator:
 2.  **编辑 (Editor):** 请审阅【章节草稿】，输出【编辑通过】或【编辑反馈】+【修改建议】。
 3.  **写手 (Writer):** 如果收到【编辑反馈】，请根据【修改建议】修改草稿，并再次以【章节草稿】...【草稿完】格式输出最终版本。
 
-请严格按流程进行。写手请注意保持角色一致性并达到目标长度（约1500字）。
+请严格按流程进行。写手请注意保持角色一致性并达到目标长度（约4500字）。
 """
         final_chapter_content = None
         # 注意这里的 Agent 列表名称需要和 custom_speaker_selection_func 中使用的名称一致

@@ -8,7 +8,7 @@ import json
 import os
 
 # --- 配置区 ---
-NUM_CHAPTERS = 5
+NUM_CHAPTERS = 10
 INITIAL_PROMPT = """
 请创作一个故事，核心元素如下：
 故事背景设定在近未来的上海，一家名为“幻境科技”的VR游戏公司内部。
