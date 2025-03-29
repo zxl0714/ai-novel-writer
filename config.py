@@ -80,6 +80,65 @@ def get_llm_config(timeout: int = 600, temperature: float = 0.7) -> Optional[Dic
         "cache_seed": None,
     }
 
+REASONING_LLM_PROVIDER = os.getenv("REASONING_LLM_PROVIDER", LLM_PROVIDER).upper() # 默认使用与上面相同的 Provider
+
+def get_reasoning_llm_config(timeout: int = 1200, temperature: float = 0.5) -> Optional[Dict]:
+    """获取推理LLM配置 (可能使用更强但更慢的模型)"""
+    config_list: List[Dict] = []
+    api_key = None
+    base_url = None
+    model = None
+
+    # 优先使用推理专用的环境变量
+    reasoning_api_key_env = f"{REASONING_LLM_PROVIDER}_API_KEY" # 例如 DASHSCOPE_API_KEY 或 REASONING_OPENAI_API_KEY
+    reasoning_base_url_env = f"{REASONING_LLM_PROVIDER}_BASE_URL"
+    reasoning_model_env = f"REASONING_MODEL_NAME" # 通用变量名指定模型
+
+    # 尝试读取推理模型的特定环境变量，如果不存在则尝试读取默认模型的环境变量
+    api_key = os.getenv(f"REASONING_{reasoning_api_key_env}", os.getenv(reasoning_api_key_env))
+    base_url = os.getenv(f"REASONING_{reasoning_base_url_env}", os.getenv(reasoning_base_url_env))
+    model = os.getenv(reasoning_model_env) # 必须指定推理模型名称
+
+    if not model: # 如果没有指定推理模型，则无法使用
+        print("信息：未在 .env 中指定 REASONING_MODEL_NAME，推理 Agent 将回退使用默认模型。")
+        return None
+    if not api_key:
+        print(f"警告：未找到推理模型 API Key (环境变量: REASONING_{reasoning_api_key_env} 或 {reasoning_api_key_env})，推理 Agent 可能无法工作。")
+        # 即使没有 key 也尝试返回配置，让 AutoGen 处理错误
+        # return None
+
+    if REASONING_LLM_PROVIDER == "OPENAI":
+        if not base_url: base_url = os.getenv("OPENAI_BASE_URL") # 继承默认 URL
+        config_list.append({
+            "model": model, "api_key": api_key, "base_url": base_url, "api_type": "openai"
+        })
+    elif REASONING_LLM_PROVIDER == "DASHSCOPE":
+        if not base_url: base_url = os.getenv("DASHSCOPE_BASE_URL", "https://dashscope.aliyuncs.com/compatible-mode/v1") # 继承默认 URL
+        config_list.append({
+            "model": model, "api_key": api_key, "base_url": base_url, "api_type": "openai"
+        })
+    elif REASONING_LLM_PROVIDER == "DEEPSEEK":
+        if not base_url: base_url = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com") # 继承默认 URL
+        config_list.append({
+            "model": model, "api_key": api_key, "base_url": base_url, "api_type": "openai"
+        })
+    # --- 可以添加其他 Provider 的逻辑 ---
+    else:
+        print(f"警告：不支持的 REASONING_LLM_PROVIDER: {REASONING_LLM_PROVIDER}")
+        return None # 不支持则无法使用
+
+    if not config_list:
+         print("错误：无法为推理模型构建有效的配置列表。")
+         return None
+
+    print(f"推理模型配置加载: Provider={REASONING_LLM_PROVIDER}, Model={model}")
+    return {
+        "timeout": timeout, # 推理可能需要更长时间
+        "temperature": temperature, # 推理任务通常用较低温度
+        "config_list": config_list,
+        "cache_seed": None, # 确认禁用缓存
+    }
+
 # 通用 Agent 配置模板
 DEFAULT_AGENT_CONFIG = {
     "human_input_mode": "NEVER", # 全自动运行，无人工输入
@@ -90,9 +149,14 @@ DEFAULT_AGENT_CONFIG = {
 
 # 获取并检查 LLM 配置
 llm_config = get_llm_config()
-if llm_config is None:
-    print("LLM 配置加载失败，请检查 .env 文件和环境变量。")
-    sys.exit(1) # 退出程序
+reasoning_llm_config = get_reasoning_llm_config() # 获取推理模型配置
 
-print(f"使用的 LLM Provider: {LLM_PROVIDER}")
-print(f"使用的模型: {llm_config['config_list'][0]['model']}")
+# 如果推理配置加载失败，用默认配置替代并给出提示
+if reasoning_llm_config is None:
+    print("警告：推理 LLM 配置加载失败或未指定，所有 Agent 将使用默认 LLM 配置。")
+    reasoning_llm_config_to_use = llm_config
+else:
+    reasoning_llm_config_to_use = reasoning_llm_config
+
+print(f"默认模型配置: Provider={LLM_PROVIDER}, Model={llm_config['config_list'][0]['model']}")
+print(f"推理 Agent 将使用的模型配置: Provider={REASONING_LLM_PROVIDER}, Model={reasoning_llm_config_to_use['config_list'][0]['model']}")

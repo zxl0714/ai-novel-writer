@@ -13,7 +13,7 @@ import os
 import time
 import re
 
-MAX_FULL_REFINEMENT_ITERATIONS = 3
+MAX_FULL_REFINEMENT_ITERATIONS = 4
 
 # _parse_outline 函数保持不变 (假设上次已包含 import re)
 def _parse_outline(outline_text: Optional[str], num_chapters: int) -> Optional[List[Dict]]:
@@ -25,17 +25,19 @@ def _parse_outline(outline_text: Optional[str], num_chapters: int) -> Optional[L
     chapters = []
     # 改进正则表达式以更好地处理换行和可选的空格
     chapter_pattern = re.compile(
-        r"^\s*\*\*\s*第\s*(\d+)\s*章\s*:\s*(.*?)\s*\*\*\s*$" # 匹配 " ** 第 N 章 : 标题 ** "
-        r"([\s\S]*?)" # 非贪婪匹配章节内容 (包括换行符)
-        r"(?=(?:^\s*\*\*\s*第\s*\d+\s*章\s*:)|(?:^\s*【大纲完】\s*$))", # 直到下一个章节标题或结束标记（都在行首）
-        re.MULTILINE # 多行模式
+        # 匹配行首、可选空格、**、可选空格、第、数字、章、可选空格、冒号(半/全角)、可选空格、标题、可选空格、**、可选空格、行尾
+        r"^\s*\*\*\s*第\s*(\d+)\s*章\s*[:：]\s*(.*?)\s*\*\*\s*$"
+        r"([\s\S]*?)" # 非贪婪匹配章节内容
+        # Lookahead: 直到下一个章节标题(同样允许两种冒号) 或 【大纲完】(行首) 或 文本末尾(\Z)
+        r"(?=(?:^\s*\*\*\s*第\s*\d+\s*章\s*[:：])|(?:^\s*【大纲完】\s*$)|\Z)",
+        re.MULTILINE
     )
 
     # 在解析前先移除可能的干扰性结尾标记，如果【大纲完】不在行首
     clean_outline_text = outline_text.strip()
-    if clean_outline_text.endswith("【大纲完】") and not clean_outline_text.endswith("\n【大纲完】"):
-         clean_outline_text = clean_outline_text[:-len("【大纲完】")].strip()
-
+    end_marker = "【大纲完】"
+    if clean_outline_text.endswith(end_marker):
+         clean_outline_text = clean_outline_text[:-len(end_marker)].strip()
 
     matches = chapter_pattern.finditer(clean_outline_text)
     processed_indices = set()
@@ -188,11 +190,11 @@ def generate_refined_outline(
     """
     print("\n--- 开始完整的大纲精炼流程 ---")
     user_proxy = get_user_proxy_agent()
-    planner = get_story_planner_agent()
+    planner = get_story_planner_agent(num_chapters=num_chapters)
     world_builder = get_world_builder_agent()
     char_creator = get_character_creator_agent()
     outline_creator = get_outline_creator_agent(num_chapters)
-    outline_editor = get_outline_editor_agent()
+    outline_editor = get_outline_editor_agent(num_chapters)
 
     current_story_plan = None
     current_world_details = None
@@ -384,26 +386,71 @@ def generate_refined_outline(
             except Exception as e:
                 print(f"生成章节大纲时出错: {e}")
 
+        # --- **新增：代码层面的完整性预检查** ---
+        print("步骤 4.5: 进行大纲草稿完整性预检查...")
+        parsed_chapters = _parse_outline(current_outline_text, num_chapters) # 先尝试解析
+        is_complete = False
+        if parsed_chapters:
+            parsed_count = len(parsed_chapters)
+            # 检查数量是否足够，并且序号是否大致连续 (允许解析出稍多或稍少几章，但不能差太多)
+            # 一个更严格的检查是序号必须完全连续：
+            is_sequential = all(parsed_chapters[j]["chapter_number"] == j + 1 for j in range(parsed_count))
+            # 考虑到解析可能不完美，先只检查数量是否接近
+            if abs(parsed_count - num_chapters) <= 1: # 允许+/-1章的误差？或者严格等于
+            # if parsed_count == num_chapters and is_sequential: # 最严格的检查
+                 print(f"预检查通过：解析出 {parsed_count} 章，基本符合要求。")
+                 is_complete = True
+            else:
+                 print(f"错误：预检查失败！解析出 {parsed_count} 章 (期望 {num_chapters} 章) 或序号不连续。要求 Outline Creator 重做。")
+        else:
+            print("错误：预检查失败！未能从大纲草稿中解析出任何章节。要求 Outline Creator 重做。")
+
+        if not is_complete:
+             last_editor_feedback = "【系统强制反馈】大纲章节数量或序号严重不符合要求（期望 {} 章，实际解析到 {} 章或无法解析），请务必生成包含从第 1 章到第 {} 章所有内容的完整、连续的大纲，禁止省略！".format(num_chapters, parsed_count if parsed_chapters else 0, num_chapters)
+             print("将基于预检查失败的反馈进入下一轮迭代...")
+             # 更新 previous 变量以便下一轮参考（即使本轮内容不完整）
+             previous_story_plan = current_story_plan
+             previous_world_details = current_world_details
+             previous_character_profiles = current_character_profiles
+             previous_outline_text = current_outline_text # 保存有问题的版本供参考
+             time.sleep(5) # 短暂暂停
+             continue # 直接跳到下一轮迭代，让 Planner 等 Agent 收到这个强制反馈
+
+
         # --- 5. 大纲编辑评审 ---
         print("步骤 5: 进行大纲编辑评审...")
-        # 检查本轮生成的内容是否都存在
+        # 确保所有需要评审的内容都存在
         if not all([current_story_plan, current_world_details, current_character_profiles, current_outline_text]):
              print("错误：缺少评审所需的完整信息，无法进行评审。跳过本轮评审。")
-             last_editor_feedback = "错误：缺少评审材料。" # 记录错误状态
+             last_editor_feedback = "错误：缺少评审材料。"
+             # 更新 previous 变量，以便下一轮能继续 (如果适用)
+             previous_story_plan = current_story_plan
+             previous_world_details = current_world_details
+             previous_character_profiles = current_character_profiles
+             previous_outline_text = current_outline_text
+             continue # 跳过本轮编辑
         else:
             editor_input_prompt = f"""请审阅以下完整材料：
 【用户初始想法】
 {initial_prompt}
+
 【本轮最新故事规划】
 {current_story_plan}
+
 【本轮最新世界设定】
 {current_world_details}
+
 【本轮最新角色档案】
-{current_character_profiles}
+{current_character_profiles}  # <--- *** 在这里加上缺失的角色档案 ***
+
 【本轮最新大纲草稿】(共 {num_chapters} 章)
 {current_outline_text}
 【草稿结束】
-请根据你的系统提示，进行全面评审，并输出 【最终批准】 或 【评审意见】+【修改建议】 或 【驳回重做】。"""
+
+{"【上一轮编辑反馈】\n" + last_editor_feedback + "\n" if i > 0 and last_editor_feedback != "无" else ""}
+{"【上一轮大纲草稿】(供对比参考)\n" + previous_outline_text + "\n" if i > 0 and previous_outline_text else ""}
+
+请根据你的系统提示（包含评审流程和输出格式要求），进行全面评审，并输出 【最终批准】 或 【评审意见】+【修改建议】 或 【驳回重做】。"""
             try:
                 user_proxy.reset()
                 user_proxy.initiate_chat(recipient=outline_editor, message=editor_input_prompt, max_turns=1, clear_history=True)
@@ -419,7 +466,7 @@ def generate_refined_outline(
                     print(f"大纲编辑回复 (第 {i+1} 轮):\n{editor_response_text[:500]}...")
                     iteration_success_flags["editor"] = True # 收到回复就算成功
 
-                    if "【最终批准】" in editor_response_text:
+                    if "【最终批准】" in editor_response_text and "优先级-高" not in editor_response_text:
                         print("大纲已获编辑最终批准！流程结束。")
                         parsed_outline = _parse_outline(current_outline_text, num_chapters)
                         if parsed_outline:
@@ -437,7 +484,7 @@ def generate_refined_outline(
                     elif "【驳回重做】" in editor_response_text:
                          print("大纲被编辑驳回重做。将在下一轮尝试。")
                          last_editor_feedback = editor_response_text
-                    elif "【评审意见】" in editor_response_text and "【修改建议】" in editor_response_text:
+                    elif "【评审意见】" in editor_response_text or "【场景规划反馈】" in editor_response_text or "优先级-高" in editor_response_text: # 明确有反馈或高优先级建议就算需要修改
                         print(f"大纲编辑提出了修改建议 (第 {i+1} 轮)，将在下一轮迭代中应用。")
                         last_editor_feedback = editor_response_text
                     else:
